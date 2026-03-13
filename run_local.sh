@@ -1,5 +1,13 @@
 #!/bin/bash
 
+if ! command -v lsof &> /dev/null
+then
+    echo "lsof not found, installing..."
+    sudo apt-get update > /dev/null
+    sudo apt-get install -y lsof > /dev/null
+    echo "lsof installed."
+fi
+
 # Kill any existing processes on these ports
 echo "Stopping any existing processes on ports 8000-8004..."
 lsof -ti:8000,8001,8002,8003,8004 | xargs kill -9 2>/dev/null

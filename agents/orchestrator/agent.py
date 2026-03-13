@@ -33,21 +33,84 @@ def create_save_output_callback(key: str):
 
 # --- Remote Agents ---
 
-# TODO: Define connections to remote agents
 # Connect to Researcher, Judge, and Content Builder using RemoteA2aAgent.
 # Remember to use the environment variables for URLs (or localhost defaults).
 
-# --- Escalation Checker ---
+# Connect to the Researcher (Localhost port 8001)
+researcher_url = os.environ.get("RESEARCHER_AGENT_CARD_URL", "http://localhost:8001/a2a/agent/.well-known/agent-card.json")
+researcher = RemoteA2aAgent(
+    name="researcher",
+    agent_card=researcher_url,
+    description="Gathers information using Google Search.",
+    # IMPORTANT: Save the output to state for the Judge to see
+    after_agent_callback=create_save_output_callback("research_findings"),
+    # IMPORTANT: Use authenticated client for communication
+    httpx_client=create_authenticated_client(researcher_url)
+)
 
-# TODO: Define EscalationChecker
+# Connect to the Judge (Localhost port 8002)
+judge_url = os.environ.get("JUDGE_AGENT_CARD_URL", "http://localhost:8002/a2a/agent/.well-known/agent-card.json")
+judge = RemoteA2aAgent(
+    name="judge",
+    agent_card=judge_url,
+    description="Evaluates research.",
+    after_agent_callback=create_save_output_callback("judge_feedback"),
+    httpx_client=create_authenticated_client(judge_url)
+)
+
+# Content Builder (Localhost port 8003)
+content_builder_url = os.environ.get("CONTENT_BUILDER_AGENT_CARD_URL", "http://localhost:8003/a2a/agent/.well-known/agent-card.json")
+content_builder = RemoteA2aAgent(
+    name="content_builder",
+    agent_card=content_builder_url,
+    description="Builds the course.",
+    httpx_client=create_authenticated_client(content_builder_url)
+)
+
+
+# --- Escalation Checker ---
 # This agent should check the status of the judge's feedback.
 # If status is "pass", it should escalate (break the loop).
+class EscalationChecker(BaseAgent):
+    """Checks the judge's feedback and escalates (breaks the loop) if it passed."""
+
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
+        # Retrieve the feedback saved by the Judge
+        feedback = ctx.session.state.get("judge_feedback")
+        print(f"[EscalationChecker] Feedback: {feedback}")
+
+        # Check for 'pass' status
+        is_pass = False
+        if isinstance(feedback, dict) and feedback.get("status") == "pass":
+            is_pass = True
+        # Handle string fallback if JSON parsing failed
+        elif isinstance(feedback, str) and '"status": "pass"' in feedback:
+            is_pass = True
+
+        if is_pass:
+            # 'escalate=True' tells the parent LoopAgent to stop looping
+            yield Event(author=self.name, actions=EventActions(escalate=True))
+        else:
+            # Continue the loop
+            yield Event(author=self.name)
+
+escalation_checker = EscalationChecker(name="escalation_checker")
 
 # --- Orchestration ---
 
-# TODO: Define the Research Loop
 # Use LoopAgent to cycle through Researcher -> Judge -> EscalationChecker.
+research_loop = LoopAgent(
+    name="research_loop",
+    description="Iteratively researches and judges until quality standards are met.",
+    sub_agents=[researcher, judge, escalation_checker],
+    max_iterations=3,
+)
 
-# TODO: Define the Root Agent (Pipeline)
 # Use SequentialAgent to run the Research Loop followed by the Content Builder.
-
+root_agent = SequentialAgent(
+    name="course_creation_pipeline",
+    description="A pipeline that researches a topic and then builds a course from it.",
+    sub_agents=[research_loop, content_builder],
+)
